@@ -125,6 +125,45 @@ export function renderEmail(sections, date = new Date()) {
 </body></html>`;
 }
 
+// GitHub Pages 첫 화면: 복사 버튼 + 메일 미리보기
+export function renderPage(emailHtml, sections) {
+  const total = sections.reduce((n, s) => n + s.items.length, 0);
+  const body = emailHtml.slice(emailHtml.indexOf('>', emailHtml.indexOf('<body')) + 1, emailHtml.lastIndexOf('</body>'));
+  const js = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
+  return `<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>아침 뉴스 스크랩</title>
+<style>
+  :root{--bg:#F3F0EA;--bar:#1E2A2F;--fg:#FFFFFF;--muted:#A9B8BC;--accent:#E08A5E}
+  body{margin:0;background:var(--bg);font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif}
+  .bar{position:sticky;top:0;z-index:2;background:var(--bar);color:var(--fg);display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center;padding:12px 16px}
+  .bar span{font-size:13px;color:var(--muted);margin-right:auto;max-width:640px}
+  .bar .in{display:flex;flex-wrap:wrap;gap:10px;align-items:center;width:100%;max-width:640px}
+  button{font:inherit;font-size:14px;font-weight:600;border-radius:6px;padding:8px 14px;cursor:pointer;border:1px solid #3A4A50;background:transparent;color:var(--fg)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#1A1310}
+  #msg{flex-basis:100%;font-size:13px;color:var(--accent);min-height:1em}
+</style></head><body>
+<div class="bar"><div class="in">
+  <span>${total}건 · 아래 내용을 그대로 Outlook 본문에 넣습니다</span>
+  <button id="code">HTML 코드 복사</button>
+  <button id="rich" class="primary">Outlook 본문 복사</button>
+  <div id="msg" aria-live="polite"></div>
+</div></div>
+<div id="mail">${body}</div>
+<script>
+const BODY=${js(body)}, FULL=${js(emailHtml)};
+const msg=(t)=>{document.getElementById('msg').textContent=t;setTimeout(()=>document.getElementById('msg').textContent='',3000)};
+function selectCopy(el){const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r);let ok=false;try{ok=document.execCommand('copy')}catch(e){}s.removeAllRanges();return ok}
+document.getElementById('rich').onclick=async()=>{
+  const el=document.getElementById('mail');
+  try{await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([BODY],{type:'text/html'}),'text/plain':new Blob([el.innerText],{type:'text/plain'})})]);msg('복사됨 · Outlook 새 메일 본문에 붙여넣으세요')}
+  catch(e){msg(selectCopy(el)?'복사됨 · Outlook 새 메일 본문에 붙여넣으세요':'복사가 막혔어요. 본문을 드래그해서 복사하세요')}
+};
+document.getElementById('code').onclick=()=>navigator.clipboard.writeText(FULL).then(()=>msg('HTML 코드 복사됨')).catch(()=>msg('복사가 막혔어요'));
+</script>
+</body></html>`;
+}
+
 async function run() {
   const now = new Date();
   const sections = await collect();
@@ -137,7 +176,7 @@ async function run() {
   await fs.writeFile(path.join(OUT_DIR, 'news.json'), json);
   await fs.writeFile(path.join(OUT_DIR, `news-${ymd}.html`), html);
   await fs.writeFile(path.join(OUT_DIR, 'latest.html'), html);
-  await fs.writeFile(path.join(OUT_DIR, 'index.html'), html); // GitHub Pages 첫 화면
+  await fs.writeFile(path.join(OUT_DIR, 'index.html'), renderPage(html, sections)); // GitHub Pages 첫 화면 (복사 버튼 + 미리보기)
   console.log(`[${now.toISOString()}] out/news-${ymd}.html 생성`);
   if (process.env.SMTP_HOST) await sendMail(html, ymd);
   return html;
