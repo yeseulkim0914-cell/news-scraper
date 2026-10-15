@@ -1,0 +1,6 @@
+{
+  "name": "naver-morning-brief",
+  "type": "module",
+  "scripts": { "start": "node news-scrap.mjs", "once": "node news-scrap.mjs --once" },
+  "dependencies": { "cheerio": "^1.2.0", "node-cron": "^4.6.0", "nodemailer": "^7.0.0" }
+}
