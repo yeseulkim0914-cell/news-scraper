@@ -20,18 +20,6 @@ GitHub Actions가 실행하고 GitHub Pages에 올리므로 PC를 켜 둘 필요
 
 Outlook에 넣을 때는 페이지를 열어 전체 선택(Ctrl+A) 후 복사해 새 메일 본문에 붙여넣으면 됩니다.
 
-## 메일로 바로 받기 (선택)
-
-**Settings → Secrets and variables → Actions** 에 아래 값을 넣으면 실행할 때마다 메일도 보냅니다.
-
-| 이름 | 예시 |
-| --- | --- |
-| `SMTP_HOST` | `smtp.office365.com` |
-| `SMTP_PORT` | `587` |
-| `SMTP_USER` | 보내는 계정 |
-| `SMTP_PASS` | 앱 비밀번호 |
-| `MAIL_TO` | 받는 주소 |
-
 ## 알아 둘 것
 
 - GitHub 예약 실행은 붐비는 시간에 5~30분 늦게 시작될 수 있습니다. 07:50 전에 받아야 하면 `news.yml`의 cron을 `30 22 * * *` 처럼 앞당기세요.
