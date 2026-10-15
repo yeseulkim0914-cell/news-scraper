@@ -1,4 +1,4 @@
-// news-scrap.mjs — 네이버 뉴스 아침 스크랩 (푸드 · 경제 · 사회) → 아웃룩용 HTML
+// news-scrap.mjs — 네이버 뉴스 아침 스크랩 (업계동향=푸드 · 경제/사회) → 아웃룩용 HTML
 // 실행:  node news-scrap.mjs --once   (지금 한 번 생성 → out/news.json, out/latest.html)
 //        node news-scrap.mjs          (매일 07:50 KST 생성 + http://localhost:3000 에서 최신본 리턴)
 import * as cheerio from 'cheerio';
@@ -9,7 +9,6 @@ import path from 'node:path';
 
 const OUT_DIR = path.resolve('out');
 const PORT = Number(process.env.PORT || 3000);
-const PER_SECTION = 8;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36';
 
 // 푸드는 네이버에 단독 섹션이 없어서
@@ -17,13 +16,16 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const FOOD_WORDS = ['식품', '외식', '맛집', '음식', '카페', '커피', '디저트', '베이커리', '빵', '라면', '편의점',
   '프랜차이즈', '배달', '메뉴', '레스토랑', '먹거리', '농산물', '과일', '한우', '주류', '맥주', '와인', '팝업'];
 
+// limit: 최대 건수 / mix: 여러 소스를 번갈아 섞어서 고르기
 const SECTIONS = [
-  { key: 'food', label: '푸드', accent: '#B4532A', sources: [
-    { url: 'https://news.naver.com/breakingnews/section/103/238' },
-    { url: 'https://news.naver.com/breakingnews/section/101/310', filter: FOOD_WORDS },
+  { key: 'industry', label: '업계동향', limit: 10, sources: [
+    { url: 'https://news.naver.com/breakingnews/section/103/238' },                    // 생활/문화 > 음식/맛집
+    { url: 'https://news.naver.com/breakingnews/section/101/310', filter: FOOD_WORDS }, // 경제 > 생활경제 중 음식 관련
   ] },
-  { key: 'economy', label: '경제', accent: '#1F5F8B', sources: [{ url: 'https://news.naver.com/section/101' }] },
-  { key: 'society', label: '사회', accent: '#3E6B48', sources: [{ url: 'https://news.naver.com/section/102' }] },
+  { key: 'econsoc', label: '경제/사회', limit: 3, mix: true, sources: [
+    { url: 'https://news.naver.com/section/101' }, // 경제 헤드라인
+    { url: 'https://news.naver.com/section/102' }, // 사회 헤드라인
+  ] },
 ];
 
 async function fetchHtml(url) {
@@ -55,21 +57,28 @@ function parseList(html, filter) {
 async function collect() {
   const result = [];
   for (const sec of SECTIONS) {
-    const seen = new Set();
-    const items = [];
+    const lists = [];
     for (const src of sec.sources) {
       try {
-        for (const it of parseList(await fetchHtml(src.url), src.filter)) {
-          const id = it.link.split('?')[0];
-          if (seen.has(id)) continue;
-          seen.add(id);
-          items.push(it);
-        }
+        lists.push(parseList(await fetchHtml(src.url), src.filter));
       } catch (e) {
         console.error(`[${sec.label}] 수집 실패:`, e.message);
+        lists.push([]);
       }
     }
-    result.push({ ...sec, items: items.slice(0, PER_SECTION) });
+    // mix면 소스별로 번갈아(경제1, 사회1, 경제2 …), 아니면 순서대로 이어 붙임
+    const ordered = sec.mix
+      ? Array.from({ length: Math.max(0, ...lists.map((l) => l.length)) }, (_, i) => lists.map((l) => l[i])).flat().filter(Boolean)
+      : lists.flat();
+    const seen = new Set();
+    const items = ordered.filter((it) => {
+      const id = it.link.split('?')[0];
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    const { sources, ...meta } = sec;
+    result.push({ ...meta, items: items.slice(0, sec.limit) });
   }
   return result;
 }
@@ -77,29 +86,24 @@ async function collect() {
 const esc = (s = '') => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 // 아웃룩(Word 렌더러) 대응: table 레이아웃, 인라인 스타일, 고정 폭 640
+// 표 머리: 구분 | 헤드라인 | 매체   (구분 칸은 rowspan으로 묶음, 헤드라인은 링크 제목만)
 export function renderEmail(sections, date = new Date()) {
   const ymd = date.toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
   const font = "'Malgun Gothic','맑은 고딕',Apple SD Gothic Neo,sans-serif";
-  const total = sections.reduce((n, s) => n + s.items.length, 0);
+  const line = '#D9D4CA';
+  const cell = `font-family:${font};font-size:13px;line-height:20px;color:#1B1B1B;border:1px solid ${line};padding:8px 10px;`;
+  const head = `font-family:${font};font-size:13px;font-weight:bold;color:#FFFFFF;background:#1E2A2F;border:1px solid #1E2A2F;padding:9px 10px;`;
 
-  const blocks = sections.map((s) => {
-    const rows = s.items.length
-      ? s.items.map((it, i) => `
-        <tr><td style="padding:12px 0;border-top:${i ? '1px solid #E6E2DA' : '0'};font-family:${font};">
-          <a href="${esc(it.link)}" style="color:#1B1B1B;text-decoration:none;font-size:15px;line-height:22px;font-weight:bold;">${esc(it.title)}</a>
-          ${it.lede ? `<div style="color:#5B5750;font-size:13px;line-height:20px;padding-top:4px;">${esc(it.lede)}</div>` : ''}
-          <div style="color:#8C877E;font-size:12px;line-height:18px;padding-top:4px;">${esc(it.press)}</div>
-        </td></tr>`).join('')
-      : `<tr><td style="padding:12px 0;font-family:${font};font-size:13px;color:#8C877E;">수집된 기사가 없습니다.</td></tr>`;
-    return `
-    <tr><td style="padding:28px 32px 8px 32px;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-        <tr><td style="font-family:${font};font-size:13px;font-weight:bold;color:${s.accent};letter-spacing:1px;border-bottom:2px solid ${s.accent};padding-bottom:8px;">
-          ${esc(s.label)} <span style="color:#8C877E;font-weight:normal;">${s.items.length}건</span>
-        </td></tr>
-        ${rows}
-      </table>
-    </td></tr>`;
+  const rows = sections.map((s) => {
+    const items = s.items.length ? s.items : [null];
+    return items.map((it, i) => `
+      <tr>
+        ${i === 0 ? `<td rowspan="${items.length}" width="90" align="center" valign="middle" bgcolor="#F6F3EE" style="${cell}font-weight:bold;background:#F6F3EE;">${esc(s.label)}</td>` : ''}
+        ${it
+          ? `<td style="${cell}"><a href="${esc(it.link)}" style="color:#1B1B1B;text-decoration:underline;">${esc(it.title)}</a></td>
+        <td width="110" align="center" style="${cell}color:#5B5750;">${esc(it.press)}</td>`
+          : `<td colspan="2" style="${cell}color:#8C877E;">수집된 기사가 없습니다.</td>`}
+      </tr>`).join('');
   }).join('');
 
   return `<!DOCTYPE html>
@@ -108,20 +112,20 @@ export function renderEmail(sections, date = new Date()) {
 <title>아침 뉴스 스크랩 ${esc(ymd)}</title>
 <!--[if mso]><style>table,td,div,a{font-family:'Malgun Gothic',sans-serif !important;}</style><![endif]-->
 </head>
-<body style="margin:0;padding:0;background:#F3F0EA;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F3F0EA"><tr><td align="center" style="padding:24px 12px;">
-  <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" bgcolor="#FFFFFF" style="width:640px;max-width:640px;">
-    <tr><td style="padding:28px 32px 20px 32px;background:#1E2A2F;font-family:${font};">
-      <div style="color:#A9B8BC;font-size:12px;letter-spacing:2px;">MORNING BRIEF · 07:50 KST</div>
-      <div style="color:#FFFFFF;font-size:22px;line-height:30px;font-weight:bold;padding-top:6px;">${esc(ymd)} 아침 뉴스</div>
-      <div style="color:#A9B8BC;font-size:13px;padding-top:4px;">푸드 · 경제 · 사회 ${total}건 · 출처 네이버 뉴스</div>
-    </td></tr>
-    ${blocks}
-    <tr><td style="padding:24px 32px 28px 32px;font-family:${font};font-size:11px;line-height:17px;color:#8C877E;">
-      제목을 누르면 네이버 뉴스 원문으로 이동합니다. 기사 저작권은 각 언론사에 있습니다.
-    </td></tr>
-  </table>
-</td></tr></table>
+<body style="margin:0;padding:0;background:#FFFFFF;">
+<table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px;max-width:640px;">
+  <tr><td style="padding:16px 0 10px 0;font-family:${font};font-size:16px;font-weight:bold;color:#1B1B1B;">${esc(ymd)} 뉴스 스크랩</td></tr>
+  <tr><td>
+    <table width="640" cellpadding="0" cellspacing="0" border="1" style="width:640px;border-collapse:collapse;border:1px solid ${line};">
+      <tr>
+        <th width="90" align="center" bgcolor="#1E2A2F" style="${head}">구분</th>
+        <th align="center" bgcolor="#1E2A2F" style="${head}">헤드라인</th>
+        <th width="110" align="center" bgcolor="#1E2A2F" style="${head}">매체</th>
+      </tr>${rows}
+    </table>
+  </td></tr>
+  <tr><td style="padding:8px 0 0 0;font-family:${font};font-size:11px;color:#8C877E;">출처 네이버 뉴스 · 기사 저작권은 각 언론사에 있습니다.</td></tr>
+</table>
 </body></html>`;
 }
 
@@ -142,6 +146,7 @@ export function renderPage(emailHtml, sections) {
   button{font:inherit;font-size:14px;font-weight:600;border-radius:6px;padding:8px 14px;cursor:pointer;border:1px solid #3A4A50;background:transparent;color:var(--fg)}
   button.primary{background:var(--accent);border-color:var(--accent);color:#1A1310}
   #msg{flex-basis:100%;font-size:13px;color:var(--accent);min-height:1em}
+  #mail{max-width:640px;margin:20px auto;padding:4px 16px 16px;background:#FFFFFF;overflow-x:auto}
 </style></head><body>
 <div class="bar"><div class="in">
   <span>${total}건 · 아래 내용을 그대로 Outlook 본문에 넣습니다</span>
@@ -191,7 +196,7 @@ async function sendMail(html, ymd) {
     secure: false,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
-  await t.sendMail({ from: process.env.SMTP_USER, to: process.env.MAIL_TO, subject: `[아침 뉴스] ${ymd} 푸드·경제·사회`, html });
+  await t.sendMail({ from: process.env.SMTP_USER, to: process.env.MAIL_TO, subject: `[아침 뉴스] ${ymd} 업계동향·경제/사회`, html });
   console.log(`메일 발송 → ${process.env.MAIL_TO}`);
 }
 
